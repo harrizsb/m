@@ -15,7 +15,6 @@ const queryEndTime = {
 // let variable di bawah ini dapat dilakukan reassign valuenya
 let limit = 1;
 let skip = 0;
-let healthCentersArray = [];
 /* End of Set Variable */
 
 if (query.date) {
@@ -51,6 +50,8 @@ function processData(r) {
 }
 
 function dealWithHealthCenter(clinics) {
+  const healthCentersArray = [];
+
   if (!query.date) {
     clinics.forEach((val) => {
       val.healthCenters.forEach((v) => {
