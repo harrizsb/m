@@ -15,6 +15,7 @@ const queryEndTime = {
 // let variable di bawah ini dapat dilakukan reassign valuenya
 let limit = 1;
 let skip = 0;
+let healthCentersArray = [];
 /* End of Set Variable */
 
 if (query.date) {
@@ -25,6 +26,135 @@ if (query.date) {
   }
 }
 
+/* 
+  Function ini berfungsi untuk memproses data.
+  Fungsi pertama dan kedua di eksekusi secara paralel, dan kernel akan menunggu hasil dari kedua func tsb. 
+  Apabila semua func selesai di eksekusi maka akan mengubah value dari x.doctors menjadi hasil dari promise.
+  Setelah itu eksekusi setFinalResult yang nanti akan di lempar ke setresult dengan parameter yaitu x dan hasil dari eksekusi func dealwithhealthcenter dengan parameter data dari promise.
+
+  note: hasil dari promise all menjadi array
+*/
+function processData(r) {
+  const x = r; // reassign x dengan r, sehingga r dapat di hapus dari memory oleh garbage collector
+  Promise.all([
+    dealWithDoctor(x),
+    dealWithClinic(x)
+  ]).then((data) => {
+    x.doctors = data[0];
+    setResult(
+      setFinalResult(
+        x,
+        dealWithHealthCenter(data[1])
+      )
+    );
+  });
+}
+
+function dealWithHealthCenter(clinics) {
+  if (!query.date) {
+    clinics.forEach((val) => {
+      val.healthCenters.forEach((v) => {
+        healthCentersArray.push(v); // menambahkan element pada array healthCentersArray
+      });
+    });
+  }
+
+  // melakukan iterasi serta filter pada suatu array berdasarkan apabila val.id tidak null dan tidak false
+  // sehingga tidak perlu melakukan !this[value.id] && (this[value.id] = true)
+  return healthCentersArray.filter((val) => {
+    return val.id;
+  }, Object.create(null)); // callback untuk membuat object dari hasil filter
+}
+
+function dealWithClinic(r) {
+  return new Promise((resolve, reject) => {
+    try {
+      let clinics = [];
+    
+      if (query.date) {
+        clinicIds = r.map((val) => {
+          return val.clinicId;
+        });
+      }
+    
+      clinics = getClinic(clinicIds); // eksekusi getClinic, nodejs akan menunggu hingga proses ini selesai
+
+      clinics.forEach((val) => {
+        // jika nilai _id sama dalam hal tipe dan valuenya dengan clinicId
+        if (val._id === value.clinicId) {
+          value.healthCenters.forEach((v) => {
+            value.healthCenterId = v.id; // set key healthcenterId sesuai dengan v.id
+            value.healthCenter = v; // set healthCenter dengan element v (asumsi {name: 'harriz', id: 1})
+          });
+        }
+      });
+    
+      resolve(clinics);
+    } catch(err) {
+      reject(err);
+    }
+  });
+}
+
+function dealWithDoctor(r) {
+  return new Promise((resolve, reject) => {
+    try {
+      r.forEach((val) => {
+        if (!val.doctors) { // jika value.doctors tidak ada atau false maka akan berhenti eksekusinya
+          return cancel(err);
+        }
+    
+        val.doctors.forEach((el) => { // iterasi
+          // jika terdapat key active, bookingsAvailable, isOnline dan value mereka true maka key booking set true
+          // && pada setiap variable berarti semua variable harus bernilai true 
+          if (el.active && el.bookingsAvailable && el.isOnline) {
+            el.booking = true;
+          }
+        });
+      });
+
+      resolve(r.doctors);
+    } catch (err) {
+      reject(new Error('error'));
+    }
+  });
+}
+
+function setFinalResult(schedules, healthCenters) {
+  let finalResult = {};
+
+  if (query.date) {
+    // membandingkan antara element pertama pada array dengan element selanjutnya
+    finalResult = schedules.reduce((r, currentVal) => {
+      // apabila element r tidak memiliki huruf atau element sesuai dengan currentVal id
+      if (r.indexOf(currentVal.healthCenter.id) === -1) { 
+        r.push(currentVal.healthCenter.id); // menambah element ke r
+      }
+
+      return r; // mengembalikan hasil r
+    }, []) // empty array merupakan element pertama bagi reduce
+    .map((healthCenterId) => { // mapping, iterasi pada masing masing element
+      return schedules.filter((el) => {
+        // mengembalikan hanya array apabila healthcenter.id tipe data dan valuenya sama dengan healthcenterid
+        return el.healthCenter.id === healthCenterId;
+      }).map((el) => { // mapping, iterasi pada masing masing element
+        return el;
+      })
+    }).concatAll(); 
+  } else {
+    // init variable dengan default value
+    const s = schedules.length > 0 ? schedules[0] : null;
+    const pLoc = healthCenters.length > 0 ? healthCenters : [];
+
+    finalResult = {
+      schedule: s,
+      practiceLocations: pLoc
+    };
+  }
+
+  return finalResult;
+}
+
 // eksekusi function getDoctorScheduleMongoCollection
 getCol.then((c) => {
   /* Definisi variable dengan default value */
@@ -33,7 +163,6 @@ getCol.then((c) => {
   const endTime = queryEndTime;
 
   if (!query.date) {
-
     /* 
       * Melakukan distinct (menyatukan hasil yang sama) berdasarkan clinicId
       * Serta melakukan spesifikasi pencarian berdasarkan doctorId
@@ -84,152 +213,52 @@ getCol.then((c) => {
       $skip: skip
     }
   ], async (err, res) => {
-    const tmp = [];
-    let clinics = [];
-    let schedules = [];
-    let healthCenters = [];
-    let healthCentersArray = [];
-    let finalResult = '';
-
     /* Error Handling, sehingga tidak melanjutkan eksekusi saat terjadi error */
     if (err) {
       return cancel(err);
     }
-
-    if (query.date) {
-      /* Iterasi dari suatu array dan hanya mengembalikan value dari key clinicId */
-      clinicIds = res.map((val) => {
-        return val.clinicId;
-      });
-    }
-
-    clinics = await getClinic(clinicIds); // eksekusi getClinic, nodejs akan menunggu hingga proses ini selesai
 
     /* Iterasi dari suatu array */
     res.forEach((value) => {
       value.id = value._id; // reassign value id dari _id
       delete value._id; // menghapus key _id
       value.booking = false; // set default value booking ke false
-
-      if (!value.doctors) { // jika value.doctors tidak ada atau false maka akan berhenti eksekusinya
-        return cancel(err);
-      }
-
-      value.doctors.forEach((el) => { // iterasi
-        // jika terdapat key active, bookingsAvailable, isOnline dan value mereka true maka key booking set true
-        // && pada setiap variable berarti semua variable harus bernilai true 
-        if (el.active && el.bookingsAvailable && el.isOnline) {
-          el.booking = true;
-        }
-      });
-
-      // iterasi
-      clinics.forEach((val) => {
-        // jika nilai _id sama dalam hal tipe dan valuenya dengan clinicId
-        if (val._id === value.clinicId) {
-          value.healthCenters.forEach((v) => {
-            value.healthCenterId = v.id; // set key healthcenterId sesuai dengan v.id
-            value.healthCenter = v; // set healthCenter dengan element v (asumsi {name: 'harriz', id: 1})
-          });
-        }
-      });
     });
 
-    if (!query.date) {
-      clinics.forEach((val) => {
-        val.healthCenters.forEach((v) => {
-          healthCentersArray.push(v); // menambahkan element pada array healthCentersArray
-        });
-      });
-    }
-
-    // melakukan iterasi serta filter pada suatu array berdasarkan apabila val.id tidak null dan tidak false
-    // sehingga tidak perlu melakukan !this[value.id] && (this[value.id] = true)
-    healthCenters = healthCentersArray.filter((val) => {
-      return val.id;
-    }, Object.create(null)); // callback untuk membuat object dari hasil filter
-
-    schedules = res;
-
-    if (query.date) {
-      // membandingkan antara element pertama pada array dengan element selanjutnya
-      finalResult = schedules.reduce((r, currentVal) => {
-        // apabila element r tidak memiliki huruf atau element sesuai dengan currentVal id
-        if (r.indexOf(currentVal.healthCenter.id) === -1) { 
-          r.push(currentVal.healthCenter.id); // menambah element ke r
-        }
-
-        return r; // mengembalikan hasil r
-      }, []) // empty array merupakan element pertama bagi reduce
-      .map((healthCenterId) => { // mapping, iterasi pada masing masing element
-        return schedules.filter((el) => {
-          // mengembalikan hanya array apabila healthcenter.id tipe data dan valuenya sama dengan healthcenterid
-          return el.healthCenter.id === healthCenterId;
-        }).map((el) => { // mapping, iterasi pada masing masing element
-          return el;
-        })
-      }).concatAll(); 
-    } else {
-      // init variable dengan default value
-      const s = schedules.length > 0 ? schedules[0] : null;
-      const pLoc = healthCenters.length > 0 ? healthCenters : [];
-
-      finalResult = {
-        schedule: s,
-        practiceLocations: pLoc
-      };
-    }
-
-    // eksekusi function setResult berdasarkan finalResult
-    setResult(finalResult);
+    processData(res);
   });
 });
 
-// fungsi asynchronous
-async function getClinic(id) {
-  let data = [],
-    // mendefinisikan promise, dengan menggunakan callback resolve dan reject
-    promise = new Promise(function (resolve, reject) {
-      repo.getHealthCenterClinicCollection().then(function (collection) {
-        // melakukan pencarian data di database
-        collection.aggregate([
-          { '$match': { '_id': { '$in': id } } },
-          { $lookup: { from: 'health-center', localField: 'healthCenter', foreignField: '_id', as: 'healthCenters' } }
-        ], function (errors, result) {
-          if (errors) return cancel(errors) // terminate & return errors
+function getClinic(id) {
+  // asumsinya ada try and catch di dalam function getHealthCenterClinicCollection
+  return repo.getHealthCenterClinicCollection().then(function (collection) {
+    // melakukan pencarian data di database
+    collection.aggregate([
+      { '$match': { '_id': { '$in': id } } },
+      { $lookup: { from: 'health-center', localField: 'healthCenter', foreignField: '_id', as: 'healthCenters' } }
+    ], function (errors, result) {
+      if (errors) return cancel(errors) // terminate & return errors
 
-          result.forEach((item) => {
-            item.healthCenters.map(function (value, index) {
-              // redefined output collection
-              let arrKey = ['name', 'description', 'type', 'telephone', 'addressDetail', '_id']
-              // iterasi dari healthcenters value key
-              Object.keys(value).map(function (key) {
-                // menghapus value dari healthcenters apabila tidak ditemukan key sesuai dengan array
-                if (!arrKey.includes(key)) delete value[key]
-                value.id = value._id
-              })
+      result.forEach((item) => {
+        item.healthCenters.map(function (value, index) {
+          // redefined output collection
+          let arrKey = ['name', 'description', 'type', 'telephone', 'addressDetail', '_id'];
+          // iterasi dari healthcenters value key
+          Object.keys(value).map(function (key) {
+            // menghapus value dari healthcenters apabila tidak ditemukan key sesuai dengan array
+            if (!arrKey.includes(key)) delete value[key];
+            value.id = value._id;
+          });
 
-              delete value._id
+          delete value._id;
 
-              return value
-            })
-          })
-          resolve(result) //memberikan hasil sukses dengan mempassing variable result
-          // reject akan memberikan hasil gagal
-        })
-      })
-    }, function (errors) {
-      // callback untuk catch error saat inisialisasi promise
-      console.log(errors)
-    })
+          return value;
+        });
+      });
 
-  data = await promise.then(function (resolve, reject) {
-    return resolve // memberikan hasil suskes tanpa passing variable
-  }, function (errors) {
-    console.log(errors)
-  })
-
-  return data
+      return result;
+    });
+  });
 }
 
 // mendifinisikan fungsi baru pada array
